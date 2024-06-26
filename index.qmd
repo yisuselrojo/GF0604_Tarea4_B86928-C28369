@@ -1,0 +1,240 @@
+---
+title: "Tarea 4"
+author: por Jesús Rojas L & Sarita Venegas V 
+format: 
+  dashboard:
+    orientation: columns
+theme: journal
+---
+
+## Carga paquetes
+```{r}
+#| label: carga-paquetes
+library(tidyverse)
+library(dplyr)
+library(sf)
+library(DT)
+library(plotly)
+library(leaflet)
+library(leaflet.extras)
+library(leafem)
+library(viridisLite)
+library(RColorBrewer)
+```
+
+## Carga datos
+
+```{r}
+#| label: carga-datos
+anfibios <-
+  st_read(
+    "especies-anfibios.csv",
+    quiet = TRUE
+  )
+areas <-
+  st_read("areas-conservacion.gpkg", quiet = TRUE)
+registros <-
+  st_read(
+    "registros-anfibios.csv",
+    options = c(
+      "X_POSSIBLE_NAMES=decimalLongitude",
+      "Y_POSSIBLE_NAMES=decimalLatitude"
+      ),
+      quiet = TRUE
+    )
+
+```
+
+
+## Row {height=30%}
+
+### Column {.tabset}
+
+```{r}
+#| label: tabla-registros
+#| title: "Cantidad de Especies Anfibios Registrados según Abreviaturas de Lista Roja de la Infraestructura Mundial de Información en Biodiversidad (GBIF)"
+anfibios |>
+  select(Abreviatura = iucnRedListCategory, Cantidad = species) |>
+  group_by(Abreviatura) |>
+  summarize(Cantidad = n()) |>
+  datatable()
+```
+
+### Column 
+
+```{r}
+#| label: grafico-1
+#| title: "Cantidad de Especies de Anfibibios en las Categorías 'en Peligro Crítico de Extinción' (CR), 'en Peligro de Extinción' (EN) y 'Vulnerables' (VU) de la Lista Roja de la Infraestructura Mundial de Información en Biodiversidad (GBIF)"
+grafico_ggplot1 <-
+  anfibios |>
+  filter(iucnRedListCategory == "VU" |
+           iucnRedListCategory == "CR" |
+           iucnRedListCategory == "EN") |>
+  group_by(iucnRedListCategory) |>
+  summarise(n = n()) |>
+  arrange(desc(n)) |>
+  ggplot(aes(x = reorder(iucnRedListCategory, -n), y = (n))) +
+  geom_text(aes(label = n), vjust = -2, size = 5, color = "black") +
+  geom_col() +
+  xlab("Categorías Seleccionadas") +
+  ylab("Cantidad de especies")
+ggplotly(grafico_ggplot1) |> config(locale = "es")
+```
+
+```{r, include=FALSE}
+#| label: BaseParaMapa
+#| title: "Mapa de riqueza de especies de anfibios en áreas de conservación"
+#| message: false
+#| warning: false
+areas <-
+  areas |>
+  st_transform(4326)
+st_crs(registros) <- 4326
+RegistrosUAreas <-
+  st_join(x = registros,
+          y = dplyr::select(areas, nombre_ac),
+          join = st_within)
+RegistrosUAreas |>
+  st_drop_geometry() |>
+  dplyr::select(species, locality, nombre_ac) |>
+  datatable(
+    colnames = c("Especie", "Localidad", "Área de Conservación"),
+    options = list(
+      pageLength = 5,
+      language = list(url = '//cdn.datatables.net/plug-ins/1.10.11/i18n/Spanish.json')
+    )
+  )
+EspeciesRegistradas <- RegistrosUAreas |>
+  st_drop_geometry() |>
+  group_by(nombre_ac) |>
+  summarize(RiquezaAnfibiosAC = n_distinct(species, na.rm = TRUE))
+EspeciesRegistradas |>
+  arrange(desc(RiquezaAnfibiosAC)) |>
+  datatable(
+    colnames = c("Área de Conservación", "Riqueza de Especies de Anfibios"),
+    options = list(
+      pageLength = 5,
+      language = list(url = '//cdn.datatables.net/plug-ins/1.10.11/i18n/Spanish.json')
+    )
+  )
+AreasURiqueza <-
+  left_join(areas, EspeciesRegistradas, by = "nombre_ac") |>
+  replace_na(list(RiquezaAnfibiosAC = 0))
+AreasURiqueza |>
+  st_drop_geometry() |>
+  dplyr::select(nombre_ac, RiquezaAnfibiosAC) |>
+  arrange(desc(RiquezaAnfibiosAC)) |>
+  datatable(
+    colnames = c("Área de Conservación", "Riqueza de Especies de Anfibios"),
+    options = list(
+      pageLength = 5,
+      language = list(url = '//cdn.datatables.net/plug-ins/1.10.11/i18n/Spanish.json')
+    )
+  )
+PaletaRiqueza <-
+  colorNumeric(
+    palette = "PuBuGn",
+    domain = AreasURiqueza$RiquezaAnfibiosAC,
+    na.color = "transparent"
+  )
+PaletaEspecies <- colorFactor(palette = "YlGn", domain = registros$species)
+```
+## Row {height=70%}
+```{r}
+#| label: mapa
+#| title: "Mapa de Riqueza de Especies de Anfibios en Áreas de Conservación"
+Mapa <- leaflet() |>
+  setView(lng = -84.19452,
+          lat = 9.572735,
+          zoom = 7) |>
+  addTiles(group = "Mapa general (OpenStreetMap)") |>
+  addProviderTiles(providers$Esri.WorldImagery, group = "Imágenes satelitales (ESRI World Imagery)") |>
+  addPolygons(
+    data = AreasURiqueza,
+    fillColor = ~ PaletaRiqueza(AreasURiqueza$RiquezaAnfibiosAC),
+    fillOpacity = 0.8,
+    color = "black",
+    stroke = TRUE,
+    weight = 1.0,
+    popup = ~ paste(
+      "<strong>Área de Conservación:</strong>",
+      nombre_ac,
+      "<br/>",
+      "<strong>Riqueza de Especies de Anfibios:</strong>",
+      RiquezaAnfibiosAC
+    ),
+    group = "Riqueza de Especies de Anfibios"
+  ) |>
+  addCircleMarkers(
+    data = registros,
+    stroke = FALSE,
+    radius = 4,
+    fillColor = ~ PaletaEspecies(registros$species),
+    fillOpacity = 1,
+    popup = ~ paste(
+      "<strong>Especie:</strong>",
+      species,
+      "<br/>",
+      "<strong>Localidad:</strong>",
+      locality,
+      "<br/>",
+      "<strong>Fecha:</strong>",
+      eventDate,
+      "<br/>",
+      "<strong>Fuente:</strong>",
+      institutionCode,
+      "<br/>",
+      "<a href='",
+      occurrenceID,
+      "'>Más información</a>"
+    ),
+    group = "Registros de Presencia"
+  ) |>
+  addLegend(
+    position = "bottomleft",
+    pal = PaletaRiqueza,
+    values = AreasURiqueza$RiquezaAnfibiosAC,
+    title = "Riqueza de Especies de Anfibios",
+    group = "Riqueza de Especies de Anfibios"
+  ) |>
+  addLegend(
+    position = "bottomright",
+    pal = PaletaEspecies,
+    values = registros$species,
+    title = "Especies",
+    group = "Registros de Presencia"
+  ) |>
+  addLayersControl(
+    baseGroups = c(
+      "Mapa general (OpenStreetMap)",
+      "Imágenes satelitales (ESRI World Imagery)"
+    ),
+    overlayGroups = c("Riqueza de Especies de Anfibios", "Registros de Presencia"),
+    options = layersControlOptions(collapsed = FALSE)
+  ) |>
+  addScaleBar(position = "bottomleft", options = scaleBarOptions(imperial = FALSE)) |>
+  addFullscreenControl() |>
+  addResetMapButton() |>
+  addMouseCoordinates() |>
+  hideGroup("Registros de Presencia")
+Mapa  
+```
+
+
+```{r}
+#| label: grafico-2
+#| title: "Riqueza de Especies de Anfibios en Áreas de Conservación"
+AreasURiquezaOrdenada <- AreasURiqueza |>
+  st_drop_geometry() |>
+  arrange(desc(RiquezaAnfibiosAC))
+Grafico2 <- ggplot(AreasURiquezaOrdenada, aes(x = reorder(siglas_ac, RiquezaAnfibiosAC), y = RiquezaAnfibiosAC)) +
+  geom_bar(stat = "identity",
+           fill = rainbow(nrow(AreasURiquezaOrdenada)),
+           color = "black") +
+  labs( x = "Área de Conservación", y = "Riqueza de Especies de Anfibios")
+grafico_interactivo <- ggplotly(Grafico2)
+grafico_interactivo
+```
+
+
+
